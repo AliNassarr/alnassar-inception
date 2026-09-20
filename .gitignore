@@ -1,7 +1,5 @@
 # Environment variables & secrets
 
-secrets/*.txt
-!secrets/*.example.txt
 
 # Data directories (local data paths)
 data/

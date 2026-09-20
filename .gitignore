@@ -1,6 +1,5 @@
 # Environment variables & secrets
-.env
-srcs/.env
+
 secrets/*.txt
 !secrets/*.example.txt
 

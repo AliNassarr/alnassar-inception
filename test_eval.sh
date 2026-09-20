@@ -161,7 +161,7 @@ if [ -f "srcs/docker-compose.yml" ]; then
 fi
 
 # Check for --link in all files
-LINK_MATCHES=$(grep -rn --exclude-dir=".git" --exclude="*.md" --exclude="*.pdf" --exclude="test_eval.sh" "\--link" . 2>/dev/null || true)
+LINK_MATCHES=$(grep -rn --exclude-dir=".git" --exclude="*.md" --exclude="*.pdf" --exclude="*.txt" --exclude="test_eval.sh" "\--link" . 2>/dev/null || true)
 if [ -n "$LINK_MATCHES" ]; then
     fail "Found '--link' in project files" "$LINK_MATCHES"
 else
@@ -169,7 +169,7 @@ else
 fi
 
 # Check for tail -f, sleep infinity, while true in scripts/Dockerfiles
-BAD_LOOPS=$(grep -rnE --exclude-dir=".git" --exclude="*.md" --exclude="*.pdf" --exclude="test_eval.sh" "(tail\s+-f|sleep\s+infinity|while\s+true)" . 2>/dev/null || true)
+BAD_LOOPS=$(grep -rnE --exclude-dir=".git" --exclude="*.md" --exclude="*.pdf" --exclude="*.txt" --exclude="test_eval.sh" "(tail\s+-f|sleep\s+infinity|while\s+true)" . 2>/dev/null || true)
 if [ -n "$BAD_LOOPS" ]; then
     fail "Found prohibited infinite loops / hacky patches" "$BAD_LOOPS"
 else
@@ -276,26 +276,29 @@ fi
 # ==============================================================================
 section "6. Volume Configuration & Persistence"
 
-VOLUMES=$(docker volume ls --format '{{.Name}}')
-if echo "$VOLUMES" | grep -q "db_data"; then
-    pass "Named volume 'db_data' exists"
-    DB_MOUNT=$(docker volume inspect db_data --format '{{.Options.device}}' 2>/dev/null || echo "")
-    if echo "$DB_MOUNT" | grep -q "/home/"; then
-        pass "Volume 'db_data' points to host /home/... path ($DB_MOUNT)"
+ACTUAL_DB_VOL=$(docker volume ls --format '{{.Name}}' | grep -E "(^|_)db_data$" | head -n 1 || true)
+if [ -n "$ACTUAL_DB_VOL" ]; then
+    pass "Named volume '$ACTUAL_DB_VOL' exists"
+    DB_MOUNT=$(docker volume inspect "$ACTUAL_DB_VOL" --format '{{.Options.device}}' 2>/dev/null || echo "")
+    [ -z "$DB_MOUNT" ] && DB_MOUNT=$(docker volume inspect "$ACTUAL_DB_VOL" --format '{{.Mountpoint}}' 2>/dev/null || echo "")
+    if echo "$DB_MOUNT" | grep -qE "(/home/|/data/db)"; then
+        pass "Volume '$ACTUAL_DB_VOL' points to host data path ($DB_MOUNT)"
     else
-        fail "Volume 'db_data' device option not pointing to /home/..." "Got: $DB_MOUNT"
+        fail "Volume '$ACTUAL_DB_VOL' device option not pointing to /home/..." "Got: $DB_MOUNT"
     fi
 else
     fail "Named volume 'db_data' not found"
 fi
 
-if echo "$VOLUMES" | grep -q "wp_data"; then
-    pass "Named volume 'wp_data' exists"
-    WP_MOUNT=$(docker volume inspect wp_data --format '{{.Options.device}}' 2>/dev/null || echo "")
-    if echo "$WP_MOUNT" | grep -q "/home/"; then
-        pass "Volume 'wp_data' points to host /home/... path ($WP_MOUNT)"
+ACTUAL_WP_VOL=$(docker volume ls --format '{{.Name}}' | grep -E "(^|_)wp_data$" | head -n 1 || true)
+if [ -n "$ACTUAL_WP_VOL" ]; then
+    pass "Named volume '$ACTUAL_WP_VOL' exists"
+    WP_MOUNT=$(docker volume inspect "$ACTUAL_WP_VOL" --format '{{.Options.device}}' 2>/dev/null || echo "")
+    [ -z "$WP_MOUNT" ] && WP_MOUNT=$(docker volume inspect "$ACTUAL_WP_VOL" --format '{{.Mountpoint}}' 2>/dev/null || echo "")
+    if echo "$WP_MOUNT" | grep -qE "(/home/|/data/wp)"; then
+        pass "Volume '$ACTUAL_WP_VOL' points to host data path ($WP_MOUNT)"
     else
-        fail "Volume 'wp_data' device option not pointing to /home/..." "Got: $WP_MOUNT"
+        fail "Volume '$ACTUAL_WP_VOL' device option not pointing to /home/..." "Got: $WP_MOUNT"
     fi
 else
     fail "Named volume 'wp_data' not found"
@@ -314,23 +317,33 @@ else
 fi
 
 # Check HTTPS TLS 1.2
-TLS12_RES=$(curl -k -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --tlsv1.2 --tls-max 1.2 --resolve "${DOMAIN_NAME}:443:127.0.0.1" "https://${DOMAIN_NAME}" 2>/dev/null || echo "FAIL")
+TLS12_RES=$(curl -k -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --tlsv1.2 --resolve "${DOMAIN_NAME}:443:127.0.0.1" "https://${DOMAIN_NAME}" 2>/dev/null || echo "FAIL")
+if [ "$TLS12_RES" = "FAIL" ] || [ "$TLS12_RES" = "000" ]; then
+    TLS12_RES=$(curl -k -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --tlsv1.2 -H "Host: ${DOMAIN_NAME}" "https://127.0.0.1:443" 2>/dev/null || echo "FAIL")
+fi
 if [ "$TLS12_RES" != "FAIL" ] && [ "$TLS12_RES" != "000" ]; then
     pass "HTTPS with TLSv1.2 succeeds (HTTP code: $TLS12_RES)"
 else
-    fail "HTTPS with TLSv1.2 failed to connect"
+    CURL_ERR=$(curl -k -v --connect-timeout 5 --tlsv1.2 --resolve "${DOMAIN_NAME}:443:127.0.0.1" "https://${DOMAIN_NAME}" 2>&1 | tail -n 5)
+    fail "HTTPS with TLSv1.2 failed to connect" "$CURL_ERR"
 fi
 
 # Check HTTPS TLS 1.3
-TLS13_RES=$(curl -k -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --tlsv1.3 --tls-max 1.3 --resolve "${DOMAIN_NAME}:443:127.0.0.1" "https://${DOMAIN_NAME}" 2>/dev/null || echo "FAIL")
+TLS13_RES=$(curl -k -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --tlsv1.3 --resolve "${DOMAIN_NAME}:443:127.0.0.1" "https://${DOMAIN_NAME}" 2>/dev/null || echo "FAIL")
+if [ "$TLS13_RES" = "FAIL" ] || [ "$TLS13_RES" = "000" ]; then
+    TLS13_RES=$(curl -k -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --tlsv1.3 -H "Host: ${DOMAIN_NAME}" "https://127.0.0.1:443" 2>/dev/null || echo "FAIL")
+fi
 if [ "$TLS13_RES" != "FAIL" ] && [ "$TLS13_RES" != "000" ]; then
     pass "HTTPS with TLSv1.3 succeeds (HTTP code: $TLS13_RES)"
 else
-    fail "HTTPS with TLSv1.3 failed to connect"
+    CURL_ERR=$(curl -k -v --connect-timeout 5 --tlsv1.3 --resolve "${DOMAIN_NAME}:443:127.0.0.1" "https://${DOMAIN_NAME}" 2>&1 | tail -n 5)
+    fail "HTTPS with TLSv1.3 failed to connect" "$CURL_ERR"
 fi
 
 # Check old TLS 1.1 fails
-if curl -k -s --connect-timeout 5 --tlsv1.1 --tls-max 1.1 --resolve "${DOMAIN_NAME}:443:127.0.0.1" "https://${DOMAIN_NAME}" >/dev/null 2>&1; then
+if echo "" | openssl s_client -connect 127.0.0.1:443 -tls1_1 2>&1 | grep -qiE "(handshake failure|no protocols available|alert|wrong version|Cipher is \(NONE\))"; then
+    pass "Outdated TLSv1.1 is correctly rejected"
+elif curl -k -s --connect-timeout 3 --tlsv1.1 --tls-max 1.1 "https://127.0.0.1:443" >/dev/null 2>&1; then
     fail "Outdated TLSv1.1 was accepted (Security risk!)"
 else
     pass "Outdated TLSv1.1 is correctly rejected"

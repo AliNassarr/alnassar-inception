@@ -10,17 +10,20 @@ secrets:
 
 volumes:
   db_data:
+    name: db_data
     driver: local
     driver_opts:
       type: bind
       o: bind
       device: ${HOST_DB_PATH}
   wp_data:
+    name: wp_data
     driver: local
     driver_opts:
       type: bind
       o: bind
       device: ${HOST_WP_PATH}
+
 
 services:
   mariadb:

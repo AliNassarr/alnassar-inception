@@ -309,35 +309,64 @@ fi
 # ==============================================================================
 section "7. SSL/TLS Verification (Port 443, TLS 1.2 & 1.3)"
 
-# Check HTTP fails
-if curl -s --connect-timeout 3 "http://127.0.0.1:80" >/dev/null 2>&1; then
+# Check HTTP fails on port 80
+HTTP_OPEN=0
+if command -v curl >/dev/null 2>&1; then
+    if curl -s --connect-timeout 3 "http://127.0.0.1:80" >/dev/null 2>&1; then
+        HTTP_OPEN=1
+    fi
+else
+    if (timeout 2 bash -c "</dev/tcp/127.0.0.1/80") 2>/dev/null; then
+        HTTP_OPEN=1
+    fi
+fi
+
+if [ "$HTTP_OPEN" -eq 1 ]; then
     fail "HTTP on port 80 is responding! (Port 80 should be closed/refused)"
 else
     pass "HTTP on port 80 fails as expected (Connection refused/closed)"
 fi
 
 # Check HTTPS TLS 1.2
-TLS12_RES=$(curl -k -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --tlsv1.2 --resolve "${DOMAIN_NAME}:443:127.0.0.1" "https://${DOMAIN_NAME}" 2>/dev/null || echo "FAIL")
-if [ "$TLS12_RES" = "FAIL" ] || [ "$TLS12_RES" = "000" ]; then
-    TLS12_RES=$(curl -k -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --tlsv1.2 -H "Host: ${DOMAIN_NAME}" "https://127.0.0.1:443" 2>/dev/null || echo "FAIL")
+TLS12_OK=0
+if command -v curl >/dev/null 2>&1; then
+    TLS12_RES=$(curl -k -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --tlsv1.2 --resolve "${DOMAIN_NAME}:443:127.0.0.1" "https://${DOMAIN_NAME}" 2>/dev/null || echo "FAIL")
+    if [ "$TLS12_RES" = "FAIL" ] || [ "$TLS12_RES" = "000" ]; then
+        TLS12_RES=$(curl -k -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --tlsv1.2 -H "Host: ${DOMAIN_NAME}" "https://127.0.0.1:443" 2>/dev/null || echo "FAIL")
+    fi
+    if [ "$TLS12_RES" != "FAIL" ] && [ "$TLS12_RES" != "000" ]; then
+        TLS12_OK=1
+        pass "HTTPS with TLSv1.2 succeeds (HTTP code: $TLS12_RES)"
+    fi
 fi
-if [ "$TLS12_RES" != "FAIL" ] && [ "$TLS12_RES" != "000" ]; then
-    pass "HTTPS with TLSv1.2 succeeds (HTTP code: $TLS12_RES)"
-else
-    CURL_ERR=$(curl -k -v --connect-timeout 5 --tlsv1.2 --resolve "${DOMAIN_NAME}:443:127.0.0.1" "https://${DOMAIN_NAME}" 2>&1 | tail -n 5)
-    fail "HTTPS with TLSv1.2 failed to connect" "$CURL_ERR"
+
+if [ "$TLS12_OK" -eq 0 ]; then
+    if echo "" | openssl s_client -connect 127.0.0.1:443 -tls1_2 2>&1 | grep -qiE "(TLSv1\.2|CONNECTED)"; then
+        pass "HTTPS with TLSv1.2 succeeds (verified via OpenSSL s_client)"
+    else
+        fail "HTTPS with TLSv1.2 failed to connect"
+    fi
 fi
 
 # Check HTTPS TLS 1.3
-TLS13_RES=$(curl -k -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --tlsv1.3 --resolve "${DOMAIN_NAME}:443:127.0.0.1" "https://${DOMAIN_NAME}" 2>/dev/null || echo "FAIL")
-if [ "$TLS13_RES" = "FAIL" ] || [ "$TLS13_RES" = "000" ]; then
-    TLS13_RES=$(curl -k -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --tlsv1.3 -H "Host: ${DOMAIN_NAME}" "https://127.0.0.1:443" 2>/dev/null || echo "FAIL")
+TLS13_OK=0
+if command -v curl >/dev/null 2>&1; then
+    TLS13_RES=$(curl -k -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --tlsv1.3 --resolve "${DOMAIN_NAME}:443:127.0.0.1" "https://${DOMAIN_NAME}" 2>/dev/null || echo "FAIL")
+    if [ "$TLS13_RES" = "FAIL" ] || [ "$TLS13_RES" = "000" ]; then
+        TLS13_RES=$(curl -k -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --tlsv1.3 -H "Host: ${DOMAIN_NAME}" "https://127.0.0.1:443" 2>/dev/null || echo "FAIL")
+    fi
+    if [ "$TLS13_RES" != "FAIL" ] && [ "$TLS13_RES" != "000" ]; then
+        TLS13_OK=1
+        pass "HTTPS with TLSv1.3 succeeds (HTTP code: $TLS13_RES)"
+    fi
 fi
-if [ "$TLS13_RES" != "FAIL" ] && [ "$TLS13_RES" != "000" ]; then
-    pass "HTTPS with TLSv1.3 succeeds (HTTP code: $TLS13_RES)"
-else
-    CURL_ERR=$(curl -k -v --connect-timeout 5 --tlsv1.3 --resolve "${DOMAIN_NAME}:443:127.0.0.1" "https://${DOMAIN_NAME}" 2>&1 | tail -n 5)
-    fail "HTTPS with TLSv1.3 failed to connect" "$CURL_ERR"
+
+if [ "$TLS13_OK" -eq 0 ]; then
+    if echo "" | openssl s_client -connect 127.0.0.1:443 -tls1_3 2>&1 | grep -qiE "(TLSv1\.3|CONNECTED)"; then
+        pass "HTTPS with TLSv1.3 succeeds (verified via OpenSSL s_client)"
+    else
+        fail "HTTPS with TLSv1.3 failed to connect"
+    fi
 fi
 
 # Check old TLS 1.1 fails

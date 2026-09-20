@@ -1,16 +1,19 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# Generate self-signed SSL/TLS certificate if missing
-if [ ! -f "/etc/nginx/ssl/alnassar.crt" ] || [ ! -f "/etc/nginx/ssl/alnassar.key" ]; then
-    echo "[INFO] Generating self-signed SSL/TLS certificate for ${DOMAIN_NAME:-alnassar.42.fr}..."
-    mkdir -p /etc/nginx/ssl
-    openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
-        -keyout /etc/nginx/ssl/alnassar.key \
-        -out /etc/nginx/ssl/alnassar.crt \
-        -subj "/C=FR/ST=Beirut/L=Beirut/O=42/OU=42/CN=${DOMAIN_NAME:-alnassar.42.fr}"
-    echo "[INFO] SSL/TLS certificate generated successfully."
+CERT_PATH="/etc/nginx/ssl/alnassar.crt"
+KEY_PATH="/etc/nginx/ssl/alnassar.key"
+DOMAIN="${DOMAIN_NAME:-alnassar.42.fr}"
+
+if [ ! -f "${CERT_PATH}" ] || [ ! -f "${KEY_PATH}" ]; then
+  echo "[nginx] Generating self-signed certificate for ${DOMAIN}..."
+  mkdir -p /etc/nginx/ssl
+  openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
+    -keyout "${KEY_PATH}" -out "${CERT_PATH}" \
+    -subj "/CN=${DOMAIN}" >/dev/null 2>&1 || true
+  chmod 600 "${KEY_PATH}"
 fi
 
-echo "[INFO] Launching NGINX as PID 1..."
+echo "[nginx] TLS ready at ${CERT_PATH}"
+echo "[nginx] Starting server..."
 exec nginx -g "daemon off;"

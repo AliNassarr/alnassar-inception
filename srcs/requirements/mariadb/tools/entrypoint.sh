@@ -1,43 +1,32 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# Read secrets safely
-if [ -f "${DB_PASSWORD_FILE}" ]; then
-    DB_PASS="$(tr -d '\r\n' < "${DB_PASSWORD_FILE}")"
-else
-    echo "[ERROR] Database password secret not found at ${DB_PASSWORD_FILE}"
-    exit 1
-fi
+# Env from .env (compose) and secrets
+DB_NAME="${MYSQL_DATABASE:?}"
+DB_USER="${MYSQL_USER:?}"
+DB_PASS_FILE="${MYSQL_PASSWORD_FILE:?}"
+ROOT_PASS_FILE="${MYSQL_ROOT_PASSWORD_FILE:?}"
 
-if [ -f "${DB_ROOT_PASSWORD_FILE}" ]; then
-    DB_ROOT_PASS="$(tr -d '\r\n' < "${DB_ROOT_PASSWORD_FILE}")"
-else
-    echo "[ERROR] Database root password secret not found at ${DB_ROOT_PASSWORD_FILE}"
-    exit 1
-fi
+DB_PASS="$(tr -d '\r\n' < "${DB_PASS_FILE}")"
+ROOT_PASS="$(tr -d '\r\n' < "${ROOT_PASS_FILE}")"
 
-# Initialize database if not already initialized
-if [ ! -d "/var/lib/mysql/${MYSQL_DATABASE}" ]; then
-    echo "[INFO] Database '${MYSQL_DATABASE}' not found. Initializing..."
-    
+# Initialize database if empty
+if [ ! -d "/var/lib/mysql/${DB_NAME}" ]; then
+    echo "[mariadb] Initializing data directory..."
     if [ ! -d "/var/lib/mysql/mysql" ]; then
-        echo "[INFO] Initializing MariaDB system tables..."
-        mariadb-install-db --user=mysql --datadir=/var/lib/mysql > /dev/null
+        mariadb-install-db --user=mysql --datadir=/var/lib/mysql --auth-root-authentication-method=normal >/dev/null
     fi
 
-    echo "[INFO] Configuring MariaDB users and database via bootstrap..."
-    mariadbd --user=mysql --datadir=/var/lib/mysql --bootstrap <<EOF
-USE mysql;
+    echo "[mariadb] Bootstrapping..."
+    mariadbd --user=mysql --datadir=/var/lib/mysql --skip-networking --socket=/run/mysqld/mysqld.sock --pid-file=/run/mysqld/mysqld.pid --bootstrap <<SQL
 FLUSH PRIVILEGES;
-ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASS}';
-CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE}\`;
-CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
-GRANT ALL PRIVILEGES ON \`${MYSQL_DATABASE}\`.* TO '${MYSQL_USER}'@'%';
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${ROOT_PASS}';
+CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
+GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'%';
 FLUSH PRIVILEGES;
-EOF
-
-    echo "[INFO] MariaDB initialization complete."
+SQL
 fi
 
-echo "[INFO] Launching MariaDB as PID 1..."
+echo "[mariadb] Starting server..."
 exec mariadbd --user=mysql --datadir=/var/lib/mysql --console

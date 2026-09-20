@@ -1,88 +1,157 @@
-NAME           := inception
+# **************************************************************************** #
+#                                   Inception                                  #
+# **************************************************************************** #
+
+# Paths
 SRC_DIR        := srcs
-COMPOSE_FILE   := $(SRC_DIR)/docker-compose.yml
+COMPOSE_FILE   := docker-compose.yml
 ENV_FILE       := $(SRC_DIR)/.env
-SECRETS_DIR    := secrets
 
-COMPOSE_CMD    := $(shell command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
+# Use docker compose (v2) or docker-compose (v1)
+COMPOSE_CMD    := $(shell command -v docker-compose >/dev/null 2>&1 && echo docker-compose || echo docker compose)
 
-PROJECT_NAME   := $(shell sed -n 's/^COMPOSE_PROJECT_NAME=\(.*\)/\1/p' $(ENV_FILE) 2>/dev/null | tr -d '\r"')
-HOST_DB_PATH   := $(shell sed -n 's/^HOST_DB_PATH=\(.*\)/\1/p'            $(ENV_FILE) 2>/dev/null | tr -d '\r"')
-HOST_WP_PATH   := $(shell sed -n 's/^HOST_WP_PATH=\(.*\)/\1/p'            $(ENV_FILE) 2>/dev/null | tr -d '\r"')
+# Read vars from .env (strip quotes/CR)
+PROJECT_NAME   := $(shell sed -n 's/^COMPOSE_PROJECT_NAME=\(.*\)/\1/p' $(ENV_FILE) | tr -d '\r"')
+DOMAIN_NAME    := $(shell sed -n 's/^DOMAIN_NAME=\(.*\)/\1/p'            $(ENV_FILE) | tr -d '\r"')
+HOST_DB_PATH   := $(shell sed -n 's/^HOST_DB_PATH=\(.*\)/\1/p'            $(ENV_FILE) | tr -d '\r"')
+HOST_WP_PATH   := $(shell sed -n 's/^HOST_WP_PATH=\(.*\)/\1/p'            $(ENV_FILE) | tr -d '\r"')
 
-ifeq ($(PROJECT_NAME),)
-	PROJECT_NAME := inception
-endif
-ifeq ($(HOST_DB_PATH),)
-	HOST_DB_PATH := /home/alnassar/data/db
-endif
-ifeq ($(HOST_WP_PATH),)
-	HOST_WP_PATH := /home/alnassar/data/wp
-endif
+# Fallback if COMPOSE_PROJECT_NAME missing
+PROJECT_NAME   := $(or $(PROJECT_NAME),inception)
+HOST_DB_PATH   := $(or $(HOST_DB_PATH),/home/alnassar/data/db)
+HOST_WP_PATH   := $(or $(HOST_WP_PATH),/home/alnassar/data/wp)
+
+.DEFAULT_GOAL := help
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
 
 define ensure_env
-	@if [ ! -f "$(ENV_FILE)" ]; then \
-		echo "[ERROR] Missing $(ENV_FILE) file."; \
+	@ if [ ! -f "$(ENV_FILE)" ]; then \
+		echo "[ERROR] $(ENV_FILE) not found. Create it first."; \
 		exit 1; \
 	fi
 endef
 
 define ensure_dirs
-	@mkdir -p "$(HOST_DB_PATH)" "$(HOST_WP_PATH)" 2>/dev/null || true
+	@ if [ -z "$(HOST_DB_PATH)" ] || [ -z "$(HOST_WP_PATH)" ]; then \
+		echo "[ERROR] HOST_DB_PATH / HOST_WP_PATH not set in $(ENV_FILE)"; \
+		exit 1; \
+	fi
+	@ mkdir -p "$(HOST_DB_PATH)" "$(HOST_WP_PATH)" 2>/dev/null || true
 endef
 
+# Ensure secrets directory and required files are present
 define ensure_secrets
-	@for f in db_password.txt db_root_password.txt wp_admin_password.txt wp_user_password.txt ; do \
-		if [ ! -f "$(SECRETS_DIR)/$$f" ]; then \
-			echo "[ERROR] Missing secret file: $(SECRETS_DIR)/$$f"; \
-			exit 1; \
-		fi; \
+	@ for f in db_password.txt db_root_password.txt wp_admin_password.txt wp_user_password.txt ; do \
+		if [ ! -f "secrets/$$f" ]; then \
+			echo "[ERROR] Missing secret file: secrets/$$f"; exit 1; \
+		fi ; \
 	done
 endef
 
-.PHONY: all up down start stop restart status logs clean fclean re help
+# Wrapper: run compose from srcs/, set project name via env var (portable)
+define compose
+	@ ( cd $(SRC_DIR) && COMPOSE_PROJECT_NAME="$(PROJECT_NAME)" $(COMPOSE_CMD) -f $(COMPOSE_FILE) $(1) )
+endef
 
-all: up
+# --------------------------------------------------------------------------- #
+# Core targets
+# --------------------------------------------------------------------------- #
 
-up: ## Build and start services in background
+.PHONY: all
+all: up  ## Alias for `up`
+
+.PHONY: up
+up: ## Build and start services (detached)
 	$(call ensure_env)
 	$(call ensure_dirs)
 	$(call ensure_secrets)
-	$(COMPOSE_CMD) -f $(COMPOSE_FILE) up -d --build
+	$(call compose, up -d --build)
 
-down: ## Stop and remove containers and networks
-	$(COMPOSE_CMD) -f $(COMPOSE_FILE) down
+.PHONY: down
+down: ## Stop & remove services (keep bind-mounted data)
+	$(call ensure_env)
+	$(call compose, down --remove-orphans)
 
-start: ## Start existing stopped containers
-	$(COMPOSE_CMD) -f $(COMPOSE_FILE) start
+.PHONY: build
+build: ## Build images only
+	$(call ensure_env)
+	$(call ensure_secrets)
+	$(call compose, build)
 
-stop: ## Stop running containers without removing them
-	$(COMPOSE_CMD) -f $(COMPOSE_FILE) stop
+.PHONY: start
+start: ## Start existing containers
+	$(call ensure_env)
+	$(call compose, start)
 
+.PHONY: stop
+stop: ## Stop running containers
+	$(call ensure_env)
+	$(call compose, stop)
+
+.PHONY: restart
 restart: ## Restart all services
-	$(COMPOSE_CMD) -f $(COMPOSE_FILE) restart
+	$(call ensure_env)
+	$(call compose, restart)
 
-status: ## Show status of containers
-	$(COMPOSE_CMD) -f $(COMPOSE_FILE) ps
+.PHONY: logs
+logs: ## Tail logs (Ctrl-C to exit)
+	$(call ensure_env)
+	$(call compose, logs -f --tail=150)
 
-logs: ## Follow service logs in real time
-	$(COMPOSE_CMD) -f $(COMPOSE_FILE) logs -f
+.PHONY: ps
+ps: ## Show service status
+	$(call ensure_env)
+	$(call compose, ps)
 
-clean: down ## Stop containers and remove networks
+# --------------------------------------------------------------------------- #
+# Cleanup
+# --------------------------------------------------------------------------- #
 
-fclean: clean ## Full cleanup: remove containers, images, volumes, and host data
-	@echo "[INFO] Removing host data directories..."
-	@rm -rf "$(HOST_DB_PATH)" "$(HOST_WP_PATH)" 2>/dev/null || sudo rm -rf "$(HOST_DB_PATH)" "$(HOST_WP_PATH)" 2>/dev/null || true
-	@echo "[INFO] Removing project volumes..."
-	@docker volume rm -f $(PROJECT_NAME)_db_data $(PROJECT_NAME)_wp_data db_data wp_data 2>/dev/null || true
-	@echo "[INFO] Removing project images..."
-	@docker rmi -f mariadb wordpress nginx 2>/dev/null || true
-	@echo "[INFO] Cleanup complete."
+.PHONY: clean
+clean: ## Down + remove local images/volumes/networks (keeps bind-mounted data)
+	$(call ensure_env)
+	$(call compose, down --remove-orphans || true)
 
-re: fclean all ## Full rebuild and start from scratch
+.PHONY: fclean
+fclean: clean ## clean + delete host data directories + remove Docker volumes
+	@ if [ -n "$(HOST_DB_PATH)" ] && [ -n "$(HOST_WP_PATH)" ]; then \
+		echo "[WARN] Removing host bind paths: $(HOST_DB_PATH) $(HOST_WP_PATH)"; \
+		sudo rm -rf "$(HOST_DB_PATH)" "$(HOST_WP_PATH)" 2>/dev/null || rm -rf "$(HOST_DB_PATH)" "$(HOST_WP_PATH)" 2>/dev/null || true; \
+	else \
+		echo "[WARN] HOST_DB_PATH/HOST_WP_PATH not set; skipping bind path removal."; \
+	fi
+	@ echo "[WARN] Removing Docker volumes..."
+	@ docker volume rm -f $(PROJECT_NAME)_db_data $(PROJECT_NAME)_wp_data db_data wp_data 2>/dev/null || true
+	@ docker system prune -af 2>/dev/null || true
 
-help: ## Display available Makefile targets
-	@echo "Usage: make [target]"
-	@echo ""
-	@echo "Targets:"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
+.PHONY: re
+re: fclean up ## Full rebuild & start
+
+# --------------------------------------------------------------------------- #
+# Utilities
+# --------------------------------------------------------------------------- #
+
+.PHONY: create-dirs
+create-dirs: ## Create bind directories from .env
+	$(call ensure_env)
+	$(call ensure_dirs)
+
+.PHONY: hosts-hint
+hosts-hint: ## Show the /etc/hosts line to add inside your VM
+	$(call ensure_env)
+	@ echo "Add to /etc/hosts (inside VM) if needed:"
+	@ echo "127.0.0.1  $(DOMAIN_NAME)"
+
+.PHONY: which-compose
+which-compose: ## Show which compose binary is used
+	@ echo "Using: $(COMPOSE_CMD)"
+
+.PHONY: help
+help: ## Show help
+	@ printf "\n\033[1mInception - Make targets\033[0m\n\n"
+	@ awk 'BEGIN{FS=":.*##"; printf "Usage: make \033[36m<TARGET>\033[0m\n\nTargets:\n"} \
+	/^[a-zA-Z0-9_\-\.]+:.*?##/ { printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+	@ printf "\nProject: \033[1m$(PROJECT_NAME)\033[0m  Domain: \033[1m$(DOMAIN_NAME)\033[0m\n\n"

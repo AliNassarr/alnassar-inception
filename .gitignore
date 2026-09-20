@@ -1,0 +1,17 @@
+# Environment variables & secrets
+.env
+srcs/.env
+secrets/*.txt
+!secrets/*.example.txt
+
+# Data directories (local data paths)
+data/
+/home/*/data/
+
+# OS and editor artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
